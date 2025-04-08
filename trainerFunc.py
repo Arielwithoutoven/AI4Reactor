@@ -5,7 +5,7 @@ from d2l import torch as d2l
 
 from config import *
 from model import CascadedFFN
-
+from myPlotFunc import Animator
 
 class Accumulator:  # @save
     """在n个变量上累加"""
@@ -63,14 +63,14 @@ def train_epoch_ch(net, train_iter, loss, updater):  # @save
 
 
 def train_ch(net, train_iter, test_iter, loss, num_epochs, updater):
-    animator = d2l.Animator(
+    animator = Animator(
         xlabel="epoch",
         ylabel="loss",
         yscale="log",
         xlim=[1, num_epochs],
         ylim=[1e-2, 1e4],
         legend=["train", "test"],
-        figsize=(14.0, 5.0)
+        figsize=(14.0, 7.0)
     )
     for epoch in range(num_epochs):
         train_metrics = train_epoch_ch(net, train_iter, loss, updater)

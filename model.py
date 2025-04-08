@@ -98,3 +98,75 @@ class CascadedFFN(nn.Module):
         final_hidden = torch.cat(hidden_outputs, dim=1)
         output = self.output_layer(final_hidden)
         return output
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, input_dim, output_dim, dropout, activation):
+        # 采用 PreActivation 模式
+        super(ResidualBlock, self).__init__()
+        self.fc = nn.Sequential(
+            nn.BatchNorm1d(input_dim),
+            activation,
+            nn.Linear(input_dim, output_dim),
+            nn.Dropout(dropout),
+            nn.BatchNorm1d(output_dim),
+            activation,
+            nn.Linear(output_dim, output_dim),
+        )
+        self.activation = activation
+        self.short_cut = nn.Linear(input_dim, output_dim) if input_dim != output_dim else nn.Identity()
+        self._init_weights()
+
+    def _init_weights(self):
+        for layer in self.fc:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_normal_(layer.weight, mode="fan_in", nonlinearity="relu")
+                nn.init.constant_(layer.bias, 0)
+        if isinstance(self.short_cut, nn.Linear):
+            nn.init.xavier_normal_(self.short_cut.weight)
+            nn.init.constant_(self.short_cut.bias, 0)
+
+    def forward(self, x):
+        residual = self.short_cut(x)
+        x = self.fc(x)
+        x += residual
+        return self.activation(x)
+
+
+class ComplexMLP(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        hidden_dims: list = [512, 256, 128, 64],
+        dropout: float = 0.3,
+        activation: str = nn.GELU(),
+    ):
+        super(ComplexMLP, self).__init__()
+
+        # 动态构建隐藏层
+        layers = []
+        prev_dim = input_dim
+        for idx, hidden_dim in enumerate(hidden_dims):
+            # 添加残差层
+            layers.append(ResidualBlock(prev_dim, hidden_dim, dropout=dropout, activation=activation))
+            prev_dim = hidden_dim
+
+        self.hidden_layers = nn.Sequential(*layers)
+        self.output_layer = nn.Linear(prev_dim, output_dim)
+
+        # 初始化权重
+        self._init_weights()
+
+    def _init_weights(self):
+        for layer in self.hidden_layers:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_normal_(layer.weight, mode="fan_in", nonlinearity="relu")
+                nn.init.constant_(layer.bias, 0)
+        nn.init.xavier_normal_(self.output_layer.weight)
+        nn.init.constant_(self.output_layer.bias, 0)
+
+    def forward(self, x):
+        x = self.hidden_layers(x)
+        x = self.output_layer(x)
+        return x

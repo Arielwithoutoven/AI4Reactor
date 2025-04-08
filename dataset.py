@@ -9,7 +9,7 @@ from config import *
 # 1. 1->1
 #    y = 5 * exp(cot(x)) + 1
 # 2. 2->1
-#    y = x1 ** 2 - x2 ** 3 - 6
+#    y = x1 ** 2 - x2 ** 2 + 1
 # 3. 2->2 test
 
 
@@ -23,8 +23,8 @@ class MyDataset(Dataset):
                 + 1
             )
         elif type == 2:
-            x1 = torch.FloatTensor(num_examples).uniform_(-10, 10)
-            x2 = torch.FloatTensor(num_examples).uniform_(-9, 9)
+            x1 = torch.FloatTensor(num_examples).uniform_(-20, 20)
+            x2 = torch.FloatTensor(num_examples).uniform_(-15, 15)
             self.features = torch.stack([x1, x2], dim=1)
             self.labels = (
                 1.5 * x1**2 - 2 * x2**2 + 1  # + torch.randn(num_examples) * 0.01

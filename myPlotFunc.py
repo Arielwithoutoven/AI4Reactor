@@ -14,7 +14,12 @@ class Animator:
         ylim=None,
         xscale="linear",
         yscale="linear",
-        fmts=("-", "m--", "g-.", "r:"),
+        fmts=[
+            {"color": "#0047AB", "linestyle": "-", "linewidth": 2},
+            {"color": "#FF6F61", "linestyle": "--", "linewidth": 2},
+            {"color": "#50C878", "linestyle": "-.", "linewidth": 2},
+            {"color": "#FFD700", "linestyle": ":", "linewidth": 2},
+        ],
         nrows=1,
         ncols=1,
         figsize=(3.5, 2.5),
@@ -29,9 +34,7 @@ class Animator:
                 self.axes,
             ]
         # 使用lambda函数捕获参数
-        self.config_axes = lambda: d2l.set_axes(
-            self.axes[0], xlabel, ylabel, xlim, ylim, xscale, yscale, legend
-        )
+        self.config_axes = lambda: d2l.set_axes(self.axes[0], xlabel, ylabel, xlim, ylim, xscale, yscale, legend)
         self.X, self.Y, self.fmts = None, None, fmts
 
     def add(self, x, y):
@@ -51,7 +54,7 @@ class Animator:
                 self.Y[i].append(b)
         self.axes[0].cla()
         for x, y, fmt in zip(self.X, self.Y, self.fmts):
-            self.axes[0].plot(x, y, fmt)
+            self.axes[0].plot(x, y, **fmt)
         self.config_axes()
         display.display(self.fig)
         display.clear_output(wait=True)
