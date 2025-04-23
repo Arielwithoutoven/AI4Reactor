@@ -9,4 +9,4 @@ num_epochs = 500  # 迭代次数
 
 batch_size = 512  # 一次训练所用样本数
 
-learning_rate = 0.005
+learning_rate = 0.003
