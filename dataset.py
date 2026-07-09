@@ -1,9 +1,9 @@
-import random
 import os
-import torch
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+import random
 
+import torch
 from config import *
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 # use complex functions
 # 1. 1->1
