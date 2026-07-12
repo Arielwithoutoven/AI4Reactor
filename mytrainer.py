@@ -1,9 +1,9 @@
 import os
 
 import torch
-from config import *
 from d2l import torch as d2l
-from model import CascadedFFN
+
+from config import *
 from myplot import Animator
 
 
