@@ -4,7 +4,7 @@ from torch.nn import MSELoss
 
 from config import device, learning_rate, num_epochs
 from dataset import test_loader, train_loader
-from models import EmbeddingRNNModel, MLPBaseline, TransformerSetModel
+from models import EmbeddingRNN, MLPBaseline, TransformerSetModel
 
 
 # 训练函数
@@ -40,34 +40,65 @@ def train(model, optimizer, train_iter, test_iter, num_epochs=num_epochs):
     return train_losses, test_losses
 
 
-# 损失函数
-criterion = MSELoss()
-# 模型
-# model = MLPBaseline().to(device)
-# model = EmbeddingRNNModel().to(device)
-model = TransformerSetModel().to(device)
+def plot_loss_distribution(model_instance, test_loader, criterion, bins=50, save_name=None):
+    import matplotlib.pyplot as plt
+    import numpy as np
 
-# 优化器
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    model_instance.eval()
+    losses = []
+    with torch.no_grad():
+        for *X, targets in test_loader:
+            outputs = model_instance(*X)
+            diff = outputs - targets
+            if diff.dim() > 1:
+                per_sample = diff.view(diff.size(0), -1).pow(2).mean(dim=1)
+            else:
+                per_sample = diff.pow(2)
+            losses.extend(per_sample.cpu().numpy())
+
+    losses = np.array(losses)
+    plt.figure(figsize=(8, 5))
+    plt.hist(losses, bins=bins, alpha=0.7)
+    plt.xlabel("MSE per sample")
+    plt.ylabel("Count")
+    plt.title(f"Loss Distribution ({model.__name__})")
+    if save_name is None:
+        save_name = f"{model.__name__}_loss_distribution.png"
+    plt.savefig(save_name)
+    plt.close()
+
+
+# 绘制训练和测试损失曲线
+def plot_loss_curve(train_losses, test_losses, path):
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(test_losses, label="Test Loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.title("Training and Testing Loss Curve")
+    plt.yscale("log")
+    plt.legend()
+    plt.savefig(path)
+    plt.close()
+
 
 if __name__ == "__main__":
-    train_losses, test_losses = train(model, optimizer, train_loader, test_loader)
+    for model in [MLPBaseline, EmbeddingRNN, TransformerSetModel]:
+        print(f"Training model: {model.__name__}")
+        # 损失函数
+        criterion = MSELoss()
+        # 模型
+        model_instance = model().to(device)
+        # 优化器
+        optimizer = optim.Adam(model_instance.parameters(), lr=learning_rate)
+        train_losses, test_losses = train(model_instance, optimizer, train_loader, test_loader)
 
-    torch.save(model, f"{model.__class__.__name__}.pth")
+        torch.save(model_instance, f"{model.__name__}.pth")
 
-    # 绘制训练和测试损失曲线
-    def plot_loss_curve(train_losses, test_losses, path):
-        import matplotlib.pyplot as plt
+        path = f"{model.__name__}_loss_curve.png"
+        plot_loss_curve(train_losses, test_losses, path)
 
-        plt.figure(figsize=(10, 5))
-        plt.plot(train_losses, label="Train Loss")
-        plt.plot(test_losses, label="Test Loss")
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.title("Training and Testing Loss Curve")
-        plt.legend()
-        plt.savefig(path)
-        plt.close()
-
-    path = f"{model.__class__.__name__}_loss_curve.png"
-    plot_loss_curve(train_losses, test_losses, path)
+        # 绘制 loss 分布（每个样本的 MSE）
+        plot_loss_distribution(model_instance, test_loader, criterion)

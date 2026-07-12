@@ -49,9 +49,6 @@ class StrFloatDataset(Dataset):
         self.max_len = max_len
         self.output_dim = output_dim
 
-        self.W = np.random.random((self.output_dim, self.output_dim))
-        self.b = np.random.random((self.output_dim,))
-
         # default vocabulary of 14 names if none provided
         if names_list is None:
             self.names_list = [f"name{i + 1}" for i in range(14)]
@@ -82,53 +79,126 @@ class StrFloatDataset(Dataset):
         return names_idx, values
 
     def _compute_targets(self, names: np.ndarray, values: np.ndarray) -> np.ndarray:
-        """Construct more complex, sample-independent targets with combinatorial name effects.
+        """Construct richer, order-invariant targets with strong within-sample combinational effects.
 
-        For each sample we build a high-dimensional feature vector that contains:
-          - per-name counts and per-name value sums
-          - pairwise name-count interactions and pairwise value interactions
+        Each sample is summarized by features that do not depend on the sequence order of
+        names. Instead, the targets rely on:
+          - per-name counts and aggregated value statistics
+          - pairwise name interactions
+          - triple name interactions
+          - global sample-level statistics
 
-        Then each sample is projected to `output_dim` using a sample-specific random
-        projection (seeded by the global `seed` and sample index) so that targets
-        across different samples are not tied together by a single global transform.
-        This also creates strong within-sample combinatorial effects from `names`.
+        This makes the target mapping permutation-invariant and much harder to fit.
         """
-        n_samples, max_len = names.shape
+        n_samples, _ = names.shape
         V = len(self.names_list)
 
-        # per-name counts and per-name summed values
+        # Per-name statistics
         name_counts = np.zeros((n_samples, V), dtype=float)
         name_value_sums = np.zeros((n_samples, V), dtype=float)
+        name_value_abs_sums = np.zeros((n_samples, V), dtype=float)
+        name_positive_sums = np.zeros((n_samples, V), dtype=float)
+        name_negative_sums = np.zeros((n_samples, V), dtype=float)
+
         for i_name in range(V):
             mask = names == (i_name + 1)
             name_counts[:, i_name] = mask.sum(axis=1)
-            # sum values where that name appears
             name_value_sums[:, i_name] = (values * mask).sum(axis=1)
+            name_value_abs_sums[:, i_name] = (np.abs(values) * mask).sum(axis=1)
+            name_positive_sums[:, i_name] = np.where(mask, np.maximum(values, 0.0), 0.0).sum(axis=1)
+            name_negative_sums[:, i_name] = np.where(mask, np.minimum(values, 0.0), 0.0).sum(axis=1)
 
-        # pairwise combination effects (unordered pairs)
+        # Pairwise interactions (unordered pairs)
         pair_idx = [(a, b) for a in range(V) for b in range(a + 1, V)]
         num_pairs = len(pair_idx)
-        pair_counts = np.zeros((n_samples, num_pairs), dtype=float)
+        pair_count_inter = np.zeros((n_samples, num_pairs), dtype=float)
         pair_value_inter = np.zeros((n_samples, num_pairs), dtype=float)
+        pair_cross_inter = np.zeros((n_samples, num_pairs), dtype=float)
+        pair_presence_inter = np.zeros((n_samples, num_pairs), dtype=float)
         for p_idx, (a, b) in enumerate(pair_idx):
-            pair_counts[:, p_idx] = name_counts[:, a] * name_counts[:, b]
+            pair_count_inter[:, p_idx] = name_counts[:, a] * name_counts[:, b]
             pair_value_inter[:, p_idx] = name_value_sums[:, a] * name_value_sums[:, b]
+            pair_cross_inter[:, p_idx] = name_counts[:, a] * name_value_sums[:, b] + name_counts[:, b] * name_value_sums[:, a]
+            pair_presence_inter[:, p_idx] = ((name_counts[:, a] > 0) & (name_counts[:, b] > 0)).astype(float)
 
-        # assemble feature vector per sample
-        features = np.concatenate([name_counts, name_value_sums, pair_counts, pair_value_inter], axis=1)
-        high_dim = features.shape[1]
+        # Triple interactions (unordered triples)
+        triple_idx = [(a, b, c) for a in range(V) for b in range(a + 1, V) for c in range(b + 1, V)]
+        num_triples = len(triple_idx)
+        triple_count_inter = np.zeros((n_samples, num_triples), dtype=float)
+        triple_value_inter = np.zeros((n_samples, num_triples), dtype=float)
+        triple_presence_inter = np.zeros((n_samples, num_triples), dtype=float)
+        for t_idx, (a, b, c) in enumerate(triple_idx):
+            triple_count_inter[:, t_idx] = name_counts[:, a] * name_counts[:, b] * name_counts[:, c]
+            triple_value_inter[:, t_idx] = name_value_sums[:, a] * name_value_sums[:, b] * name_value_sums[:, c]
+            triple_presence_inter[:, t_idx] = ((name_counts[:, a] > 0) & (name_counts[:, b] > 0) & (name_counts[:, c] > 0)).astype(float)
 
-        # build targets per-sample using a sample-specific random projection
-        Y = np.zeros((n_samples, self.output_dim), dtype=float)
-        base_seed = 10007
-        for i in range(n_samples):
-            rng = np.random.RandomState(seed + base_seed + i)
-            P = rng.normal(loc=0.0, scale=1.0, size=(high_dim, self.output_dim))
-            b = rng.normal(loc=0.0, scale=0.1, size=(self.output_dim,))
-            y = np.tanh(features[i] @ P + b)
-            # small per-sample noise
-            y += rng.normal(scale=0.01, size=y.shape)
-            Y[i] = y
+        # Global sample statistics
+        sample_length = (names > 0).sum(axis=1).astype(float)
+        total_value_sum = values.sum(axis=1)
+        total_value_abs = np.abs(values).sum(axis=1)
+        total_value_sq = np.square(values).sum(axis=1)
+        value_variance = np.var(values, axis=1)
+
+        # Assemble order-invariant feature vector
+        features = np.concatenate(
+            [
+                name_counts,
+                name_value_sums,
+                name_value_abs_sums,
+                name_positive_sums,
+                name_negative_sums,
+                pair_count_inter,
+                pair_value_inter,
+                pair_cross_inter,
+                pair_presence_inter,
+                triple_count_inter,
+                triple_value_inter,
+                triple_presence_inter,
+                sample_length[:, None],
+                total_value_sum[:, None],
+                total_value_abs[:, None],
+                total_value_sq[:, None],
+                value_variance[:, None],
+            ],
+            axis=1,
+        )
+        features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # direct sample-level target construction based on counts and value statistics
+        # Output dimension is formed by concatenating:
+        #   - per-name count features (V dims)
+        #   - per-name total value features (V dims)
+        #   - per-name absolute value totals (V dims)
+        #   - sample length, value sum, abs sum, square sum, variance
+        # If output_dim is larger than this base size, we repeat or tile values.
+        V = len(self.names_list)
+        base_features = np.concatenate(
+            [
+                name_counts,
+                name_value_sums,
+                name_value_abs_sums,
+                sample_length[:, None],
+                total_value_sum[:, None],
+                total_value_abs[:, None],
+                total_value_sq[:, None],
+                value_variance[:, None],
+            ],
+            axis=1,
+        )
+        base_features = np.nan_to_num(base_features, nan=0.0, posinf=0.0, neginf=0.0)
+
+        target_dim = self.output_dim
+        if base_features.shape[1] >= target_dim:
+            Y = base_features[:, :target_dim]
+        else:
+            repeats = int(np.ceil(target_dim / base_features.shape[1]))
+            Y = np.tile(base_features, (1, repeats))[:, :target_dim]
+
+        # normalize each target dimension to roughly [-1, 1]
+        Y_mean = Y.mean(axis=0, keepdims=True)
+        Y_std = Y.std(axis=0, keepdims=True)
+        Y_std[Y_std < 1e-6] = 1.0
+        Y = (Y - Y_mean) / Y_std
 
         return Y
 
@@ -156,10 +226,45 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 if __name__ == "__main__":
     data = generate_synthetic_data(num_samples=n_samples, vocab=vocab, max_len=15)
     ds = StrFloatDataset(data, names_list=vocab)
-    print("names shape:", ds.names_tensor.shape)
-    print("values shape:", ds.values_tensor.shape)
-    print("Y shape:", ds.Y.shape)
+    # tensors may be on GPU
+    names_t = ds.names_tensor
+    values_t = ds.values_tensor
+    Y_t = ds.Y
+    print("names shape:", names_t.shape)
+    print("values shape:", values_t.shape)
+    print("Y shape:", Y_t.shape)
     # show first sample
-    print("first names:", ds.names_tensor[0])
-    print("first values:", ds.values_tensor[0])
-    print("first Y (trim):", ds.Y[0][:6])
+    print("first names:", names_t[0])
+    print("first values:", values_t[0])
+    print("first Y (trim):", Y_t[0][:6])
+
+    # compute and print statistics for Y
+    Y = Y_t.cpu().numpy() if isinstance(Y_t, torch.Tensor) else np.array(Y_t)
+    overall_mean = float(Y.mean())
+    overall_std = float(Y.std())
+    per_dim_mean = Y.mean(axis=0)
+    per_dim_std = Y.std(axis=0)
+    y_min = float(Y.min())
+    y_max = float(Y.max())
+    p05 = float(np.percentile(Y, 5))
+    p95 = float(np.percentile(Y, 95))
+
+    print(f"Y overall mean: {overall_mean:.6f}, std: {overall_std:.6f}")
+    print(f"Y min/max: {y_min:.6f} / {y_max:.6f}")
+    print(f"Y 5/95 percentiles: {p05:.6f} / {p95:.6f}")
+    print("Y per-dim mean (first 8):", np.round(per_dim_mean[:8], 6))
+    print("Y per-dim std  (first 8):", np.round(per_dim_std[:8], 6))
+
+    # save summary to file
+    np.savez(
+        "Y_stats.npz",
+        overall_mean=overall_mean,
+        overall_std=overall_std,
+        per_dim_mean=per_dim_mean,
+        per_dim_std=per_dim_std,
+        y_min=y_min,
+        y_max=y_max,
+        p05=p05,
+        p95=p95,
+    )
+    print("Saved Y statistics to Y_stats.npz")

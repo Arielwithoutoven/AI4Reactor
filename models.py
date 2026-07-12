@@ -2,33 +2,6 @@ import torch
 import torch.nn as nn
 
 
-class RBFLayer(nn.Module):
-    def __init__(self, input_dim, num_centers, sigma=None):
-        super(RBFLayer, self).__init__()
-        self.input_dim = input_dim
-        self.num_centers = num_centers
-
-        # 初始化中心点（可学习参数）
-        self.centers = nn.Parameter(torch.randn(num_centers, input_dim))
-
-        # 宽度参数（可学习或固定）
-        if sigma is None:
-            self.sigma = nn.Parameter(torch.ones(1))  # 共享的可学习 sigma
-        else:
-            self.sigma = sigma  # 固定值（如预计算的平均距离）
-
-    def forward(self, x):
-        # 计算输入与中心点的欧氏距离（广播机制）
-        # x.shape: (batch_size, input_dim)
-        # centers.shape: (num_centers, input_dim)
-        x_expanded = x.unsqueeze(1)  # (batch_size, 1, input_dim)
-        centers_expanded = self.centers.unsqueeze(0)  # (1, num_centers, input_dim)
-        distances = torch.norm(x_expanded - centers_expanded, dim=2)  # (batch_size, num_centers)
-
-        # 高斯径向基函数
-        return torch.exp(-(distances**2) / (2 * self.sigma**2))
-
-
 class MLPBaseline(nn.Module):
     """Baseline MLP that embeds names, scales by values, flattens and predicts Y."""
 
@@ -45,13 +18,12 @@ class MLPBaseline(nn.Module):
 
     def forward(self, names, values):
         # names: (B, L), values: (B, L)
-        emb = self.emb(names)  # (B, L, emb_dim)
-        scaled = emb * values.unsqueeze(-1)  # broadcast
-        flat = scaled.view(scaled.size(0), -1)
+        emb = self.emb(names) * values.unsqueeze(-1)  # (B, L, emb_dim)
+        flat = emb.view(emb.size(0), -1)
         return self.net(flat)
 
 
-class EmbeddingRNNModel(nn.Module):
+class EmbeddingRNN(nn.Module):
     """Embed names, scale by values, run a bi-GRU, aggregate and predict."""
 
     def __init__(self, vocab_size=15, emb_dim=32, rnn_hidden=64, output_dim=25):
@@ -66,15 +38,18 @@ class EmbeddingRNNModel(nn.Module):
 
     def forward(self, names, values):
         # names: (B, L), values: (B, L)
-        mask = names != 0
-        emb = self.emb(names) * values.unsqueeze(-1)
+        emb = self.emb(names) * values.unsqueeze(-1)  # (B, L, emb_dim)
         out, _ = self.rnn(emb)  # (B, L, 2*rnn_hidden)
 
         # aggregate by masked mean
-        mask_f = mask.unsqueeze(-1).float()
-        summed = (out * mask_f).sum(dim=1)
-        denom = mask_f.sum(dim=1).clamp(min=1.0)
-        mean = summed / denom
+        # mask 表示有效位置
+        # summed 表示每个样本的有效位置的输出向量的和
+        # denom 表示每个样本的有效位置的数量，
+        # mean 表示每个样本的有效位置的输出向量的平均值
+        mask = (names != 0).unsqueeze(-1).float()  # (B, L, 1)
+        summed = (out * mask).sum(dim=1)  # (B, 2*rnn_hidden)
+        denom = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
+        mean = summed / denom  # (B, 2*rnn_hidden)
         return self.head(mean)
 
 
